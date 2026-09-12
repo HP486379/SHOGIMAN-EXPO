@@ -1,3 +1,4 @@
+// Build the exact SHOGIMAN-IOS web UI into one self-contained HTML payload for Expo/WebView.
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
