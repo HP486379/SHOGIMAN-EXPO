@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Alert,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -9,9 +10,28 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { BoardGrid, CpuLevel, DisplayMode, Piece, PieceType, Position } from './src/types/shogi';
+import {
+  BoardGrid,
+  CpuLevel,
+  DisplayMode,
+  EffectCell,
+  HandPieces,
+  Piece,
+  PieceType,
+  Position,
+} from './src/types/shogi';
 import { createInitialBoard } from './src/utils/initialBoard';
-import { getValidMoves } from './src/utils/moveRules';
+import { mustPromote, moveTouchesPromotionZone } from './src/utils/moveRules';
+import {
+  GameMove,
+  applyMoveToBoard,
+  cloneHands,
+  getCheckStatus,
+  getCheckmateWinner,
+  getDropEffects,
+  getLegalMoveEffects,
+} from './src/utils/shogiEngine';
+import { chooseCpuMove } from './src/utils/cpuPlayer';
 
 const MILITARY: Record<PieceType, string> = {
   pawn: 'INF', lance: 'ART', knight: 'DRN', silver: 'SPC', gold: 'GRD', bishop: 'RKT', rook: 'TNK', king: 'HQ',
@@ -19,24 +39,35 @@ const MILITARY: Record<PieceType, string> = {
 const SHOGI: Record<PieceType, string> = {
   pawn: '歩', lance: '香', knight: '桂', silver: '銀', gold: '金', bishop: '角', rook: '飛', king: '王',
 };
+const PROMOTED_SHOGI: Partial<Record<PieceType, string>> = {
+  pawn: 'と', lance: '杏', knight: '圭', silver: '全', bishop: '馬', rook: '龍',
+};
 
+const EMPTY_HANDS: HandPieces = { black: [], white: [] };
 const samePos = (a: Position | null, b: Position) => !!a && a.row === b.row && a.col === b.col;
-const cloneBoard = (board: BoardGrid): BoardGrid => board.map((row) => row.map((p) => p ? { ...p } : null));
 
-function allCpuMoves(board: BoardGrid) {
-  const moves: { from: Position; to: Position }[] = [];
-  board.forEach((row, r) => row.forEach((piece, c) => {
-    if (piece?.player !== 'white') return;
-    getValidMoves(board, { row: r, col: c }, piece).forEach((effect) => moves.push({ from: { row: r, col: c }, to: effect.position }));
-  }));
-  return moves;
+function removeOne(items: PieceType[], target: PieceType): PieceType[] {
+  const index = items.indexOf(target);
+  if (index < 0) return items;
+  return [...items.slice(0, index), ...items.slice(index + 1)];
 }
 
-function applyMove(board: BoardGrid, from: Position, to: Position): BoardGrid {
-  const next = cloneBoard(board);
-  next[to.row][to.col] = next[from.row][from.col];
-  next[from.row][from.col] = null;
+function nextHandsAfterMove(board: BoardGrid, hands: HandPieces, move: GameMove, player: 'black' | 'white'): HandPieces {
+  const next = cloneHands(hands);
+  if (move.dropPiece) {
+    next[player] = removeOne(next[player], move.dropPiece);
+    return next;
+  }
+  const captured = board[move.to.row][move.to.col];
+  if (captured && captured.type !== 'king') next[player].push(captured.type);
   return next;
+}
+
+function handCounts(items: PieceType[]) {
+  return items.reduce<Partial<Record<PieceType, number>>>((acc, type) => {
+    acc[type] = (acc[type] ?? 0) + 1;
+    return acc;
+  }, {});
 }
 
 export default function App() {
@@ -44,60 +75,138 @@ export default function App() {
   const boardWidth = Math.min(width - 16, 720);
   const cell = boardWidth / 9;
   const [board, setBoard] = useState<BoardGrid>(() => createInitialBoard());
+  const [hands, setHands] = useState<HandPieces>(() => cloneHands(EMPTY_HANDS));
   const [selected, setSelected] = useState<Position | null>(null);
+  const [selectedHandPiece, setSelectedHandPiece] = useState<PieceType | null>(null);
   const [mode, setMode] = useState<DisplayMode>('military');
   const [cpuLevel, setCpuLevel] = useState<CpuLevel>('normal');
   const [moveCount, setMoveCount] = useState(0);
   const [message, setMessage] = useState('1P READY');
+  const [cpuThinking, setCpuThinking] = useState(false);
+  const [winner, setWinner] = useState<'black' | 'white' | null>(null);
 
-  const effects = useMemo(() => {
+  const effects = useMemo<EffectCell[]>(() => {
+    if (selectedHandPiece) return getDropEffects(board, selectedHandPiece, 'black');
     if (!selected) return [];
     const piece = board[selected.row][selected.col];
-    return piece ? getValidMoves(board, selected, piece) : [];
-  }, [board, selected]);
+    return piece ? getLegalMoveEffects(board, hands, selected, piece) : [];
+  }, [board, hands, selected, selectedHandPiece]);
 
   const reset = () => {
     setBoard(createInitialBoard());
+    setHands(cloneHands(EMPTY_HANDS));
     setSelected(null);
+    setSelectedHandPiece(null);
     setMoveCount(0);
+    setCpuThinking(false);
+    setWinner(null);
     setMessage('1P READY');
   };
 
-  const cpuTurn = (afterPlayerMove: BoardGrid) => {
-    const candidates = allCpuMoves(afterPlayerMove);
-    if (!candidates.length) {
-      setMessage('CPU NO MOVE');
+  const finishCpuMove = (sourceBoard: BoardGrid, sourceHands: HandPieces, move: GameMove) => {
+    const nextHands = nextHandsAfterMove(sourceBoard, sourceHands, move, 'white');
+    const nextBoard = applyMoveToBoard(sourceBoard, move, 'white');
+    const nextWinner = getCheckmateWinner(nextBoard, nextHands);
+    const checked = getCheckStatus(nextBoard);
+    setBoard(nextBoard);
+    setHands(nextHands);
+    setMoveCount((v) => v + 1);
+    setCpuThinking(false);
+    setWinner(nextWinner);
+    if (nextWinner === 'white') setMessage('HQ LOST · CPU VICTORY');
+    else if (nextWinner === 'black') setMessage('CPU HQ LOST · 1P VICTORY');
+    else if (checked === 'black') setMessage('WARNING · HQ UNDER ATTACK');
+    else setMessage('1P READY');
+  };
+
+  const scheduleCpuTurn = (sourceBoard: BoardGrid, sourceHands: HandPieces) => {
+    const immediateWinner = getCheckmateWinner(sourceBoard, sourceHands);
+    if (immediateWinner) {
+      setWinner(immediateWinner);
+      setCpuThinking(false);
+      setMessage(immediateWinner === 'black' ? 'CPU HQ LOST · 1P VICTORY' : 'HQ LOST · CPU VICTORY');
       return;
     }
-    const pick = candidates[Math.floor(Math.random() * candidates.length)];
+    setCpuThinking(true);
+    setMessage('CPU THINKING');
     setTimeout(() => {
-      setBoard(applyMove(afterPlayerMove, pick.from, pick.to));
-      setMoveCount((v) => v + 1);
-      setMessage('1P READY');
-    }, 350);
+      const move = chooseCpuMove(sourceBoard, sourceHands, cpuLevel);
+      if (!move) {
+        setCpuThinking(false);
+        setMessage('CPU NO LEGAL MOVE');
+        return;
+      }
+      finishCpuMove(sourceBoard, sourceHands, move);
+    }, 360);
+  };
+
+  const executePlayerMove = (move: GameMove) => {
+    const nextHands = nextHandsAfterMove(board, hands, move, 'black');
+    const nextBoard = applyMoveToBoard(board, move, 'black');
+    const nextWinner = getCheckmateWinner(nextBoard, nextHands);
+    const checked = getCheckStatus(nextBoard);
+    setBoard(nextBoard);
+    setHands(nextHands);
+    setSelected(null);
+    setSelectedHandPiece(null);
+    setMoveCount((v) => v + 1);
+    setWinner(nextWinner);
+    if (nextWinner) {
+      setMessage(nextWinner === 'black' ? 'CPU HQ LOST · 1P VICTORY' : 'HQ LOST · CPU VICTORY');
+      return;
+    }
+    if (checked === 'white') setMessage('ENEMY HQ UNDER ATTACK');
+    scheduleCpuTurn(nextBoard, nextHands);
   };
 
   const onCell = (row: number, col: number) => {
+    if (cpuThinking || winner) return;
     const pos = { row, col };
     const piece = board[row][col];
-    if (selected) {
-      const legal = effects.some((e) => samePos(e.position, pos));
-      if (legal) {
-        const next = applyMove(board, selected, pos);
-        setBoard(next);
-        setSelected(null);
-        setMoveCount((v) => v + 1);
-        setMessage('CPU THINKING');
-        cpuTurn(next);
-        return;
-      }
+    const legal = effects.some((e) => samePos(e.position, pos));
+
+    if (selectedHandPiece && legal) {
+      executePlayerMove({ to: pos, dropPiece: selectedHandPiece, promote: false });
+      return;
     }
+
+    if (selected && legal) {
+      const moving = board[selected.row][selected.col];
+      if (!moving) return;
+      const forced = mustPromote(moving, pos);
+      const optional = !forced && moveTouchesPromotionZone(moving, selected, pos);
+      const base: GameMove = { from: selected, to: pos, promote: forced };
+      if (optional) {
+        Alert.alert(
+          mode === 'shogi' ? '成りますか？' : 'UPGRADE UNIT?',
+          mode === 'shogi' ? 'この駒を成ることができます。' : 'Promotion zone reached.',
+          [
+            { text: mode === 'shogi' ? '成らない' : 'KEEP', onPress: () => executePlayerMove({ ...base, promote: false }) },
+            { text: mode === 'shogi' ? '成る' : 'UPGRADE', onPress: () => executePlayerMove({ ...base, promote: true }) },
+          ],
+        );
+      } else {
+        executePlayerMove(base);
+      }
+      return;
+    }
+
     if (piece?.player === 'black') {
       setSelected(pos);
-      setMessage(`${mode === 'military' ? MILITARY[piece.type] : SHOGI[piece.type]} SELECTED`);
+      setSelectedHandPiece(null);
+      setMessage(`${pieceLabel(piece, mode)} SELECTED`);
     } else {
       setSelected(null);
+      setSelectedHandPiece(null);
+      setMessage('1P READY');
     }
+  };
+
+  const selectHand = (type: PieceType) => {
+    if (cpuThinking || winner) return;
+    setSelected(null);
+    setSelectedHandPiece((current) => current === type ? null : type);
+    setMessage(`${mode === 'military' ? MILITARY[type] : SHOGI[type]} DEPLOY`);
   };
 
   return (
@@ -107,7 +216,7 @@ export default function App() {
         <View style={styles.commandRow}>
           <View style={styles.segment}>
             {(['military', 'shogi'] as DisplayMode[]).map((value) => (
-              <Pressable key={value} onPress={() => { setMode(value); setSelected(null); }} style={[styles.segmentButton, mode === value && styles.segmentActive]}>
+              <Pressable key={value} onPress={() => { setMode(value); setSelected(null); setSelectedHandPiece(null); }} style={[styles.segmentButton, mode === value && styles.segmentActive]}>
                 <Text style={[styles.segmentText, mode === value && styles.segmentTextActive]}>{value.toUpperCase()}</Text>
               </Pressable>
             ))}
@@ -122,9 +231,11 @@ export default function App() {
         </View>
 
         <View style={styles.turnPanel}>
-          <Text style={styles.turnText}>▼ 1P SENTE · {cpuLevel.toUpperCase()}</Text>
+          <Text style={styles.turnText}>{cpuThinking ? '▼ CPU GOTE' : '▼ 1P SENTE'} · {cpuLevel.toUpperCase()}</Text>
           <Text style={styles.moveText}>MOVES {moveCount}</Text>
         </View>
+
+        <HandRow title="CPU CAPTURED" items={hands.white} mode={mode} cpu compact />
 
         <View style={[styles.board, { width: boardWidth, height: boardWidth }]}>
           {board.map((row, r) => row.map((piece, c) => {
@@ -138,7 +249,7 @@ export default function App() {
                 style={[
                   styles.cell,
                   { width: cell, height: cell },
-                  effect?.kind === 'capture' ? styles.captureCell : effect ? styles.moveCell : null,
+                  effect?.kind === 'capture' ? styles.captureCell : effect?.kind === 'cross' ? styles.crossCell : effect?.kind === 'diagonal' ? styles.diagonalCell : effect ? styles.moveCell : null,
                   isSelected && styles.selectedCell,
                 ]}
               >
@@ -148,6 +259,8 @@ export default function App() {
             );
           }))}
         </View>
+
+        <HandRow title="1P CAPTURED" items={hands.black} mode={mode} selected={selectedHandPiece} onSelect={selectHand} />
 
         <View style={styles.statusPanel}>
           <Text style={styles.statusTitle}>TACTIC CHANNEL</Text>
@@ -164,19 +277,64 @@ export default function App() {
   );
 }
 
+function pieceLabel(piece: Piece, mode: DisplayMode) {
+  if (mode === 'military') return MILITARY[piece.type];
+  if (piece.promoted && PROMOTED_SHOGI[piece.type]) return PROMOTED_SHOGI[piece.type]!;
+  return SHOGI[piece.type];
+}
+
 function PieceView({ piece, mode }: { piece: Piece; mode: DisplayMode }) {
-  const text = mode === 'military' ? MILITARY[piece.type] : SHOGI[piece.type];
+  const text = pieceLabel(piece, mode);
   return (
     <View style={[styles.piece, piece.player === 'white' && styles.cpuPiece]}>
       <Text style={[styles.pieceText, mode === 'shogi' && styles.kanji]}>{text}</Text>
-      {piece.promoted ? <Text style={styles.promoted}>UP</Text> : null}
+      {piece.promoted && mode === 'military' ? <Text style={styles.promoted}>UP</Text> : null}
+    </View>
+  );
+}
+
+function HandRow({
+  title,
+  items,
+  mode,
+  selected,
+  onSelect,
+  cpu,
+  compact,
+}: {
+  title: string;
+  items: PieceType[];
+  mode: DisplayMode;
+  selected?: PieceType | null;
+  onSelect?: (type: PieceType) => void;
+  cpu?: boolean;
+  compact?: boolean;
+}) {
+  const counts = handCounts(items);
+  const types = Object.keys(counts) as PieceType[];
+  return (
+    <View style={[styles.handPanel, compact && styles.handPanelCompact]}>
+      <Text style={styles.handTitle}>{title}</Text>
+      <View style={[styles.handPieces, cpu && styles.cpuHandPieces]}>
+        {types.length === 0 ? <Text style={styles.handEmpty}>—</Text> : types.map((type) => (
+          <Pressable
+            key={type}
+            disabled={!onSelect}
+            onPress={() => onSelect?.(type)}
+            style={[styles.handChip, selected === type && styles.handChipSelected, cpu && styles.cpuHandChip]}
+          >
+            <Text style={[styles.handChipText, mode === 'shogi' && styles.handKanji]}>{mode === 'military' ? MILITARY[type] : SHOGI[type]}</Text>
+            {(counts[type] ?? 0) > 1 ? <Text style={styles.handCount}>×{counts[type]}</Text> : null}
+          </Pressable>
+        ))}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#050909' },
-  page: { minHeight: '100%', alignItems: 'center', padding: 8, paddingBottom: 24, gap: 10 },
+  page: { minHeight: '100%', alignItems: 'center', padding: 8, paddingBottom: 24, gap: 8 },
   commandRow: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   segment: { flexDirection: 'row', borderWidth: 1, borderColor: '#23544a', backgroundColor: '#07100f' },
   segmentButton: { paddingVertical: 8, paddingHorizontal: 10 },
@@ -188,10 +346,24 @@ const styles = StyleSheet.create({
   turnPanel: { width: '100%', borderWidth: 1, borderColor: '#a54432', backgroundColor: '#160a08', padding: 10, flexDirection: 'row', justifyContent: 'space-between' },
   turnText: { color: '#ff7960', fontSize: 13, letterSpacing: 1.4, fontWeight: '700' },
   moveText: { color: '#a78780', fontSize: 11 },
+  handPanel: { width: '100%', minHeight: 58, borderWidth: 1, borderColor: '#4b4930', backgroundColor: '#0b0e09', padding: 6 },
+  handPanelCompact: { minHeight: 48 },
+  handTitle: { color: '#7b8160', fontSize: 8, letterSpacing: 1.5, marginBottom: 4 },
+  handPieces: { minHeight: 30, flexDirection: 'row', flexWrap: 'wrap', gap: 5, alignItems: 'center' },
+  cpuHandPieces: { transform: [{ rotate: '180deg' }] },
+  handEmpty: { color: '#42483a', fontSize: 13 },
+  handChip: { minWidth: 42, minHeight: 30, borderWidth: 1, borderColor: '#a99a50', backgroundColor: '#1b2415', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
+  cpuHandChip: { borderColor: '#5b91b0', backgroundColor: '#151d23' },
+  handChipSelected: { borderWidth: 2, borderColor: '#f6ef23', backgroundColor: '#3e4514' },
+  handChipText: { color: '#f2e88c', fontSize: 9, fontWeight: '900' },
+  handKanji: { fontSize: 16 },
+  handCount: { position: 'absolute', right: 2, bottom: 0, color: '#fff', fontSize: 7 },
   board: { flexDirection: 'row', flexWrap: 'wrap', borderWidth: 4, borderColor: '#332f1d', backgroundColor: '#5d5431' },
   cell: { borderWidth: StyleSheet.hairlineWidth, borderColor: '#242113', alignItems: 'center', justifyContent: 'center', backgroundColor: '#6a6139' },
   moveCell: { backgroundColor: '#b27322' },
   captureCell: { backgroundColor: '#7f251e' },
+  crossCell: { backgroundColor: '#315b78' },
+  diagonalCell: { backgroundColor: '#3f6638' },
   selectedCell: { borderWidth: 3, borderColor: '#f6ef23' },
   moveGlyph: { color: '#ffd676', fontSize: 18, fontWeight: '900', position: 'absolute' },
   piece: { minWidth: '76%', minHeight: '58%', borderRadius: 6, borderWidth: 1, borderColor: '#d8cb6f', backgroundColor: '#1b2415', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 2 },
