@@ -1,0 +1,4 @@
+[submodule "reference/shogiman-ios"]
+	path = reference/shogiman-ios
+	url = https://github.com/HP486379/SHOGIMAN-IOS.git
+	branch = main
