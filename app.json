@@ -6,16 +6,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "ios": {
-      "supportsTablet": false,
-      "bundleIdentifier": "com.hp486379.shogiman"
-    },
-    "android": {
-      "package": "com.hp486379.shogiman"
-    },
-    "extra": {
-      "eas": {
-        "projectId": "REPLACE_AFTER_EAS_INIT"
-      }
+      "supportsTablet": false
     }
   }
 }
