@@ -52,6 +52,8 @@ const SHOGI: Record<PieceType, string> = {
 const PROMOTED_SHOGI: Partial<Record<PieceType, string>> = {
   pawn: 'と', lance: '杏', knight: '圭', silver: '全', bishop: '馬', rook: '龍',
 };
+const PIECE_ORDER: PieceType[] = ['pawn', 'lance', 'knight', 'silver', 'gold', 'bishop', 'rook', 'king'];
+
 const GUIDE_CROP_WIDTH = 44.9;
 const GUIDE_CROP_HEIGHT = 18.9;
 const GUIDE_SOURCE_RATIO = 450 / 360;
@@ -103,10 +105,21 @@ function handCounts(items: PieceType[]) {
   }, {});
 }
 
+function pieceLabel(piece: Piece, mode: DisplayMode) {
+  if (mode === 'military') return MILITARY[piece.type];
+  if (piece.promoted && PROMOTED_SHOGI[piece.type]) return PROMOTED_SHOGI[piece.type]!;
+  return SHOGI[piece.type];
+}
+
 export default function App() {
   const { width } = useWindowDimensions();
-  const boardWidth = Math.min(width - 16, 720);
+
+  // SHOGIMAN-IOS is the source of truth: the battle UI is an iPhone-width shell.
+  const shellWidth = Math.min(width, 480);
+  const contentWidth = Math.max(304, shellWidth - 16);
+  const boardWidth = contentWidth;
   const cell = boardWidth / 9;
+
   const [board, setBoard] = useState<BoardGrid>(() => createInitialBoard());
   const [hands, setHands] = useState<HandPieces>(() => cloneHands(EMPTY_HANDS));
   const [selected, setSelected] = useState<Position | null>(null);
@@ -142,6 +155,8 @@ export default function App() {
   const checkPlayer = useMemo(() => getCheckStatus(board), [board]);
   const advisor = useExpoAdvisor({ board, hands, moveCount, cpuThinking, winner, checkPlayer, lastMovePlayer });
   const activeGuideType = selectedHandPiece ?? miniGuide?.piece.type ?? (selected ? board[selected.row]?.[selected.col]?.type ?? null : null);
+  const score = String(moveCount * 100).padStart(6, '0');
+  const turn = cpuThinking ? 'CPU' : '1P';
 
   const openAi = () => {
     advisor.markRead();
@@ -310,33 +325,58 @@ export default function App() {
     setMessage(`${mode === 'military' ? MILITARY[type] : SHOGI[type]} DEPLOY`);
   };
 
+  const switchMode = (value: DisplayMode) => {
+    setMode(value);
+    setSelected(null);
+    setSelectedHandPiece(null);
+    setMiniGuide(null);
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={styles.page} bounces={false}>
-        <View style={styles.commandRow}>
-          <View style={styles.segment}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.page, { width: shellWidth }]}
+        bounces={false}
+      >
+        <View style={styles.battleControls}>
+          <ControlRow label="MODE">
             {(['military', 'shogi'] as DisplayMode[]).map((value) => (
-              <Pressable key={value} onPress={() => { setMode(value); setSelected(null); setSelectedHandPiece(null); setMiniGuide(null); }} style={[styles.segmentButton, mode === value && styles.segmentActive]}>
-                <Text style={[styles.segmentText, mode === value && styles.segmentTextActive]}>{value.toUpperCase()}</Text>
-              </Pressable>
+              <SegmentButton
+                key={value}
+                text={value.toUpperCase()}
+                active={mode === value}
+                onPress={() => switchMode(value)}
+              />
             ))}
-          </View>
-          <View style={styles.segment}>
+          </ControlRow>
+
+          <ControlRow label="CPU">
             {(['easy', 'normal', 'hard'] as CpuLevel[]).map((value) => (
-              <Pressable key={value} onPress={() => setCpuLevel(value)} style={[styles.levelButton, cpuLevel === value && styles.segmentActive]}>
-                <Text style={[styles.levelText, cpuLevel === value && styles.segmentTextActive]}>{value.slice(0, 1).toUpperCase()}</Text>
-              </Pressable>
+              <SegmentButton
+                key={value}
+                text={value.toUpperCase()}
+                active={cpuLevel === value}
+                onPress={() => setCpuLevel(value)}
+              />
             ))}
+          </ControlRow>
+
+          <View style={styles.statusRow}>
+            <StatusItem label="TURN" value={turn} accent="#ff765e" />
+            <StatusItem label="MOVES" value={String(moveCount).padStart(3, '0')} />
+            <StatusItem label="SCORE" value={score} accent="#54e8a7" />
           </View>
         </View>
 
-        <View style={styles.turnPanel}>
-          <Text style={styles.turnText}>{cpuThinking ? '▼ CPU GOTE' : '▼ 1P SENTE'} · {cpuLevel.toUpperCase()}</Text>
-          <Text style={styles.moveText}>MOVES {moveCount}</Text>
-        </View>
+        <HandRow title="CPU CAPTURED" items={hands.white} mode={mode} cpu />
 
-        <HandRow title="CPU CAPTURED" items={hands.white} mode={mode} cpu compact />
+        <View style={[styles.turnBanner, cpuThinking ? styles.cpuTurnBanner : styles.playerTurnBanner]}>
+          <Text style={[styles.turnBannerText, cpuThinking ? styles.cpuTurnText : styles.playerTurnText]}>
+            {cpuThinking ? '▲ CPU SENTE' : '▼ 1P SENTE'} · {cpuLevel.toUpperCase()}
+          </Text>
+        </View>
 
         <View style={[styles.boardWrap, { width: boardWidth, height: boardWidth }]}>
           <Animated.View style={[styles.board, { width: boardWidth, height: boardWidth, transform: [{ translateX: shakeX }] }]}>
@@ -351,11 +391,18 @@ export default function App() {
                   style={[
                     styles.cell,
                     { width: cell, height: cell },
-                    effect?.kind === 'capture' ? styles.captureCell : effect?.kind === 'cross' ? styles.crossCell : effect?.kind === 'diagonal' ? styles.diagonalCell : effect ? styles.moveCell : null,
+                    effect?.kind === 'capture' ? styles.captureCell
+                      : effect?.kind === 'cross' ? styles.crossCell
+                        : effect?.kind === 'diagonal' ? styles.diagonalCell
+                          : effect ? styles.moveCell : null,
                     isSelected && styles.selectedCell,
                   ]}
                 >
-                  {effect && !piece ? <Text style={styles.moveGlyph}>{effect.kind === 'diagonal' ? '✦' : effect.kind === 'cross' ? '╋' : '◆'}</Text> : null}
+                  {effect && !piece ? (
+                    <Text style={styles.moveGlyph}>
+                      {effect.kind === 'diagonal' ? '✦' : effect.kind === 'cross' ? '╋' : effect.kind === 'capture' ? '✕' : '◆'}
+                    </Text>
+                  ) : null}
                   {piece ? <PieceView piece={piece} mode={mode} /> : null}
                 </Pressable>
               );
@@ -379,28 +426,68 @@ export default function App() {
               </Animated.View>
             ) : null}
           </Animated.View>
+
           {mode === 'military' && miniGuide ? <MiniGuideOverlay state={miniGuide} boardWidth={boardWidth} /> : null}
         </View>
 
-        <HandRow title="1P CAPTURED" items={hands.black} mode={mode} selected={selectedHandPiece} onSelect={selectHand} />
+        <View style={styles.gateMeter}>
+          <Text style={styles.gateText}>▽ 1P GOTE ▰▰▰▰▰▰ 100%</Text>
+        </View>
+
+        <HandRow
+          title="1P CAPTURED"
+          items={hands.black}
+          mode={mode}
+          selected={selectedHandPiece}
+          onSelect={selectHand}
+        />
+
+        {checkPlayer === 'black' ? (
+          <View style={styles.radioAlert}>
+            <Text style={styles.radioAlertText}>⚡ TACTIC ALERT · HQ UNDER DIRECT ATTACK</Text>
+          </View>
+        ) : null}
+
+        {winner ? (
+          <View style={[styles.radioAlert, styles.victoryAlert]}>
+            <Text style={[styles.radioAlertText, styles.victoryText]}>
+              {winner === 'black' ? 'MISSION COMPLETE · 1P VICTORY' : 'MISSION FAILED · CPU VICTORY'}
+            </Text>
+          </View>
+        ) : null}
 
         <View style={styles.statusPanel}>
           <Text style={styles.statusTitle}>TACTIC CHANNEL · {advisor.evaluation}</Text>
           <Text style={styles.statusText}>{message}</Text>
         </View>
 
-        <View style={styles.bottomBar}>
-          <Pressable style={[styles.tool, advisor.unread && styles.toolUnread]} onPress={openAi}>
-            <Text style={styles.toolText}>◆ AI</Text>
-            {advisor.unread ? <View style={styles.unreadDot} /> : null}
-          </Pressable>
-          <Pressable style={styles.tool} onPress={() => setSheet('guide')}><Text style={styles.toolText}>▣ GUIDE</Text></Pressable>
-          <Pressable style={styles.tool} onPress={() => setSheet('settings')}><Text style={styles.toolText}>⚙ SET</Text></Pressable>
-        </View>
+        <View style={styles.bottomSpacer} />
       </ScrollView>
 
+      <View style={[styles.bottomBar, { width: shellWidth }]}>
+        <Pressable style={[styles.tool, styles.aiTool, advisor.unread && styles.toolUnread]} onPress={openAi}>
+          <Text style={[styles.toolIcon, styles.aiToolText]}>◆</Text>
+          <Text style={[styles.toolText, styles.aiToolText]}>AI</Text>
+          {advisor.unread ? <View style={styles.unreadDot} /> : null}
+        </Pressable>
+        <Pressable style={styles.tool} onPress={() => setSheet('guide')}>
+          <Text style={styles.toolIcon}>▣</Text>
+          <Text style={styles.toolText}>GUIDE</Text>
+        </Pressable>
+        <Pressable style={styles.tool} onPress={() => setSheet('settings')}>
+          <Text style={styles.toolIcon}>⚙</Text>
+          <Text style={styles.toolText}>SET</Text>
+        </Pressable>
+      </View>
+
       {advisor.transmission ? (
-        <Pressable style={styles.transmission} onPress={openAi}>
+        <Pressable
+          style={[
+            styles.transmission,
+            { width: Math.max(280, shellWidth - 24), left: (width - Math.max(280, shellWidth - 24)) / 2 },
+          ]}
+          onPress={openAi}
+        >
           <View style={styles.transmissionHead}>
             <Text style={styles.transmissionTitle}>⚡ TACTIC ADVISOR</Text>
             <Text style={styles.transmissionEval}>{advisor.evaluation}</Text>
@@ -415,12 +502,12 @@ export default function App() {
         sheet={sheet}
         onClose={() => setSheet(null)}
         mode={mode}
-        setMode={(value) => { setMode(value); setMiniGuide(null); }}
+        setMode={switchMode}
         cpuLevel={cpuLevel}
         setCpuLevel={setCpuLevel}
         reset={() => { reset(); setSheet(null); }}
         activeGuideType={activeGuideType}
-        width={width}
+        width={shellWidth}
         advisor={{
           evaluation: advisor.evaluation,
           latestAdvice: advisor.latestAdvice,
@@ -433,10 +520,30 @@ export default function App() {
   );
 }
 
-function pieceLabel(piece: Piece, mode: DisplayMode) {
-  if (mode === 'military') return MILITARY[piece.type];
-  if (piece.promoted && PROMOTED_SHOGI[piece.type]) return PROMOTED_SHOGI[piece.type]!;
-  return SHOGI[piece.type];
+function ControlRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <View style={styles.controlRow}>
+      <Text style={styles.controlLabel}>{label}</Text>
+      <View style={styles.segment}>{children}</View>
+    </View>
+  );
+}
+
+function SegmentButton({ text, active, onPress }: { text: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={[styles.segmentButton, active && styles.segmentActive]}>
+      <Text style={[styles.segmentText, active && styles.segmentTextActive]}>{text}</Text>
+    </Pressable>
+  );
+}
+
+function StatusItem({ label, value, accent }: { label: string; value: string; accent?: string }) {
+  return (
+    <View style={styles.statusItem}>
+      <Text style={styles.statusLabel}>{label}</Text>
+      <Text style={[styles.statusValue, accent ? { color: accent } : null]}>{value}</Text>
+    </View>
+  );
 }
 
 function MilitaryArtwork({ piece }: { piece: Piece }) {
@@ -454,11 +561,11 @@ function PieceView({ piece, mode }: { piece: Piece; mode: DisplayMode }) {
       {mode === 'military' ? (
         <>
           <View style={styles.pieceArtwork}><MilitaryArtwork piece={piece} /></View>
-          <Text style={styles.militaryBadge}>{text}</Text>
+          <Text style={[styles.militaryBadge, piece.player === 'white' && styles.cpuBadge]}>{text}</Text>
           {piece.promoted ? <Text style={styles.promoted}>UP</Text> : null}
         </>
       ) : (
-        <View style={styles.shogiPiece}>
+        <View style={[styles.shogiPiece, piece.player === 'white' && styles.cpuShogiPiece]}>
           <Text style={styles.kanji}>{text}</Text>
         </View>
       )}
@@ -489,15 +596,15 @@ function GuideCrop({ type, width }: { type: PieceType; width: number }) {
 }
 
 function MiniGuideOverlay({ state, boardWidth }: { state: Exclude<MiniGuideState, null>; boardWidth: number }) {
-  const width = Math.min(boardWidth * 0.56, 235);
+  const width = Math.min(boardWidth * 0.46, 176);
   const sourceWidth = width / (GUIDE_CROP_WIDTH / 100);
   const guideHeight = sourceWidth * GUIDE_SOURCE_RATIO * (GUIDE_CROP_HEIGHT / 100);
   const leftPercent = Math.min(76, Math.max(24, ((state.pos.col + 0.5) / 9) * 100));
   const left = (leftPercent / 100) * boardWidth - width / 2;
   const showBelow = state.piece.player === 'black';
   const edge = showBelow
-    ? ((state.pos.row + 1.12) / 9) * boardWidth
-    : ((9 - state.pos.row + 0.12) / 9) * boardWidth;
+    ? ((state.pos.row + 1.2) / 9) * boardWidth
+    : ((9 - state.pos.row + 0.2) / 9) * boardWidth;
   const position = showBelow ? { top: edge } : { bottom: edge };
   return (
     <View pointerEvents="none" style={[styles.miniGuide, { left, width, height: guideHeight }, position]}>
@@ -514,7 +621,6 @@ function HandRow({
   selected,
   onSelect,
   cpu,
-  compact,
 }: {
   title: string;
   items: PieceType[];
@@ -522,20 +628,19 @@ function HandRow({
   selected?: PieceType | null;
   onSelect?: (type: PieceType) => void;
   cpu?: boolean;
-  compact?: boolean;
 }) {
   const counts = handCounts(items);
-  const types = Object.keys(counts) as PieceType[];
+  const types = PIECE_ORDER.filter((type) => (counts[type] ?? 0) > 0);
   return (
-    <View style={[styles.handPanel, compact && styles.handPanelCompact]}>
-      <Text style={styles.handTitle}>{title}</Text>
+    <View style={[styles.handPanel, cpu ? styles.cpuHandPanel : styles.playerHandPanel]}>
+      <Text style={[styles.handTitle, cpu ? styles.cpuHandTitle : styles.playerHandTitle]}>{title}</Text>
       <View style={[styles.handPieces, cpu && styles.cpuHandPieces]}>
-        {types.length === 0 ? <Text style={styles.handEmpty}>—</Text> : types.map((type) => (
+        {types.length === 0 ? <Text style={styles.handEmpty}>EMPTY</Text> : types.map((type) => (
           <Pressable
             key={type}
             disabled={!onSelect}
             onPress={() => onSelect?.(type)}
-            style={[styles.handChip, selected === type && styles.handChipSelected, cpu && styles.cpuHandChip]}
+            style={[styles.handChip, selected === type && styles.handChipSelected]}
           >
             {mode === 'military' ? (
               <>
@@ -545,7 +650,7 @@ function HandRow({
             ) : (
               <Text style={styles.handKanji}>{SHOGI[type]}</Text>
             )}
-            {(counts[type] ?? 0) > 1 ? <Text style={styles.handCount}>×{counts[type]}</Text> : null}
+            <Text style={styles.handCount}>×{counts[type]}</Text>
           </Pressable>
         ))}
       </View>
@@ -593,12 +698,13 @@ function SheetModal({
   return (
     <Modal visible={sheet !== null} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.modalBackdrop} onPress={onClose}>
-        <Pressable style={styles.sheet} onPress={() => undefined}>
+        <Pressable style={[styles.sheet, { width }]} onPress={() => undefined}>
           <View style={styles.sheetHandle} />
           <View style={styles.sheetHeading}>
             <Text style={styles.sheetTitle}>{title}</Text>
             <Pressable onPress={onClose}><Text style={styles.closeText}>×</Text></Pressable>
           </View>
+
           {sheet === 'ai' ? (
             <View style={styles.advisorBody}>
               <View style={styles.advisorState}>
@@ -611,7 +717,9 @@ function SheetModal({
                   {advisor.latestAdvice.bullets[0] ? <Text style={styles.advisorText}>{advisor.latestAdvice.bullets[0]}</Text> : null}
                 </View>
               ) : (
-                <Text style={styles.advisorEmpty}>重要な局面変化を検知した時だけAI参謀が自動介入します。必要ならANALYZEで現在局面を確認できます。</Text>
+                <Text style={styles.advisorEmpty}>
+                  重要な局面変化を検知した時だけAI参謀が自動介入します。必要ならANALYZEで現在局面を確認できます。
+                </Text>
               )}
               <Pressable
                 disabled={!advisor.canAnalyze || advisor.source === 'loading'}
@@ -644,20 +752,20 @@ function SheetModal({
               <Text style={styles.settingLabel}>DISPLAY</Text>
               <View style={styles.settingSegment}>
                 {(['military', 'shogi'] as DisplayMode[]).map((value) => (
-                  <Pressable key={value} onPress={() => setMode(value)} style={[styles.settingButton, mode === value && styles.settingActive]}>
-                    <Text style={styles.settingButtonText}>{value.toUpperCase()}</Text>
-                  </Pressable>
+                  <SegmentButton key={value} text={value.toUpperCase()} active={mode === value} onPress={() => setMode(value)} />
                 ))}
               </View>
+
               <Text style={styles.settingLabel}>CPU LEVEL</Text>
               <View style={styles.settingSegment}>
                 {(['easy', 'normal', 'hard'] as CpuLevel[]).map((value) => (
-                  <Pressable key={value} onPress={() => setCpuLevel(value)} style={[styles.settingButton, cpuLevel === value && styles.settingActive]}>
-                    <Text style={styles.settingButtonText}>{value.toUpperCase()}</Text>
-                  </Pressable>
+                  <SegmentButton key={value} text={value.toUpperCase()} active={cpuLevel === value} onPress={() => setCpuLevel(value)} />
                 ))}
               </View>
-              <Pressable style={styles.resetButton} onPress={reset}><Text style={styles.resetText}>RESET BATTLE</Text></Pressable>
+
+              <Pressable style={styles.resetButton} onPress={reset}>
+                <Text style={styles.resetText}>RESET BATTLE</Text>
+              </Pressable>
             </View>
           )}
         </Pressable>
@@ -667,93 +775,340 @@ function SheetModal({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#050909' },
-  page: { minHeight: '100%', alignItems: 'center', padding: 8, paddingBottom: 24, gap: 8 },
-  commandRow: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
-  segment: { flexDirection: 'row', borderWidth: 1, borderColor: '#23544a', backgroundColor: '#07100f' },
-  segmentButton: { paddingVertical: 8, paddingHorizontal: 10 },
-  levelButton: { paddingVertical: 8, paddingHorizontal: 9 },
-  segmentActive: { backgroundColor: '#14392f', borderColor: '#54e2c1' },
-  segmentText: { color: '#7ba398', fontSize: 10, letterSpacing: 1 },
-  levelText: { color: '#7ba398', fontSize: 11, fontWeight: '700' },
-  segmentTextActive: { color: '#7fffe0' },
-  turnPanel: { width: '100%', borderWidth: 1, borderColor: '#a54432', backgroundColor: '#160a08', padding: 10, flexDirection: 'row', justifyContent: 'space-between' },
-  turnText: { color: '#ff7960', fontSize: 13, letterSpacing: 1.4, fontWeight: '700' },
-  moveText: { color: '#a78780', fontSize: 11 },
-  handPanel: { width: '100%', minHeight: 58, borderWidth: 1, borderColor: '#4b4930', backgroundColor: '#0b0e09', padding: 6 },
-  handPanelCompact: { minHeight: 48 },
-  handTitle: { color: '#7b8160', fontSize: 8, letterSpacing: 1.5, marginBottom: 4 },
-  handPieces: { minHeight: 30, flexDirection: 'row', flexWrap: 'wrap', gap: 5, alignItems: 'center' },
+  safe: { flex: 1, backgroundColor: '#030507' },
+  scroll: { flex: 1 },
+  page: {
+    alignSelf: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 86,
+    backgroundColor: '#050809',
+  },
+
+  battleControls: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#6b5f18',
+    borderRadius: 8,
+    padding: 10,
+    backgroundColor: '#090c09',
+    marginBottom: 8,
+  },
+  controlRow: { width: '100%', flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  controlLabel: { width: 44, color: '#8d986f', fontSize: 11, letterSpacing: 0.8 },
+  segment: { flex: 1, flexDirection: 'row', gap: 5 },
+  segmentButton: {
+    flex: 1,
+    minHeight: 34,
+    borderWidth: 1,
+    borderColor: '#3d4934',
+    borderRadius: 4,
+    backgroundColor: '#0b110d',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
+  segmentActive: { borderColor: '#22d87d', backgroundColor: '#09301d' },
+  segmentText: { color: '#a9b396', fontSize: 10, letterSpacing: 0.5, fontWeight: '700' },
+  segmentTextActive: { color: '#60ffb0' },
+
+  statusRow: {
+    width: '100%',
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: '#2a3122',
+    paddingTop: 8,
+    gap: 6,
+  },
+  statusItem: { flex: 1, gap: 2 },
+  statusLabel: { color: '#7e8973', fontSize: 9, letterSpacing: 0.5 },
+  statusValue: { color: '#d6dba7', fontSize: 13, fontWeight: '800' },
+
+  handPanel: {
+    width: '100%',
+    minHeight: 58,
+    borderWidth: 1,
+    borderRadius: 7,
+    paddingVertical: 8,
+    paddingHorizontal: 9,
+    backgroundColor: '#040809',
+    marginBottom: 7,
+  },
+  cpuHandPanel: { borderColor: '#1e6ba5' },
+  playerHandPanel: { borderColor: '#b54a31', marginTop: 0 },
+  handTitle: { fontSize: 11, marginBottom: 6, letterSpacing: 0.3 },
+  cpuHandTitle: { color: '#58b9ff' },
+  playerHandTitle: { color: '#ff7862' },
+  handPieces: { minHeight: 28, flexDirection: 'row', flexWrap: 'wrap', gap: 5, alignItems: 'center' },
   cpuHandPieces: { transform: [{ rotate: '180deg' }] },
-  handEmpty: { color: '#42483a', fontSize: 13 },
-  handChip: { width: 45, height: 36, borderWidth: 1, borderColor: '#a99a50', backgroundColor: '#10170d', alignItems: 'center', justifyContent: 'center' },
-  cpuHandChip: { borderColor: '#5b91b0', backgroundColor: '#10161b' },
-  handChipSelected: { borderWidth: 2, borderColor: '#f6ef23', backgroundColor: '#3e4514' },
-  handArtwork: { width: 34, height: 30 },
-  handMilitaryLabel: { position: 'absolute', bottom: 1, color: '#fff6a8', backgroundColor: '#11170d', borderWidth: 1, borderColor: '#d7c965', fontSize: 6, paddingHorizontal: 2 },
-  handKanji: { color: '#f2e88c', fontSize: 18, fontWeight: '800' },
-  handCount: { position: 'absolute', right: 1, top: 0, color: '#fff', backgroundColor: '#8d2c20', fontSize: 7, paddingHorizontal: 2 },
+  handEmpty: { color: '#77755e', marginLeft: 'auto', fontSize: 11 },
+  handChip: {
+    height: 32,
+    minWidth: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingHorizontal: 5,
+    borderWidth: 1,
+    borderColor: '#4e5520',
+    borderRadius: 4,
+    backgroundColor: '#0b100a',
+  },
+  handChipSelected: { borderColor: '#ffe73b', borderWidth: 2 },
+  handArtwork: { width: 25, height: 25 },
+  handMilitaryLabel: { color: '#e7dc72', fontSize: 8 },
+  handKanji: { color: '#e7dc72', fontSize: 17, fontWeight: '900' },
+  handCount: { color: '#e7dc72', fontSize: 9, fontWeight: '800' },
+
+  turnBanner: {
+    maxWidth: '100%',
+    alignSelf: 'center',
+    marginVertical: 6,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderRadius: 4,
+  },
+  playerTurnBanner: { borderColor: '#b44a31', backgroundColor: '#1d0805' },
+  cpuTurnBanner: { borderColor: '#1e6ba5', backgroundColor: '#040d14' },
+  turnBannerText: { fontSize: 11, letterSpacing: 0.5, fontWeight: '700' },
+  playerTurnText: { color: '#ff755c' },
+  cpuTurnText: { color: '#57b9ff' },
+
   boardWrap: { position: 'relative', overflow: 'visible' },
-  board: { flexDirection: 'row', flexWrap: 'wrap', borderWidth: 4, borderColor: '#332f1d', backgroundColor: '#5d5431', overflow: 'hidden' },
-  cell: { borderWidth: StyleSheet.hairlineWidth, borderColor: '#242113', alignItems: 'center', justifyContent: 'center', backgroundColor: '#6a6139' },
-  moveCell: { backgroundColor: '#b27322' },
-  captureCell: { backgroundColor: '#7f251e' },
-  crossCell: { backgroundColor: '#315b78' },
-  diagonalCell: { backgroundColor: '#3f6638' },
-  selectedCell: { borderWidth: 3, borderColor: '#f6ef23' },
+  board: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    borderWidth: 5,
+    borderColor: '#4c3a18',
+    backgroundColor: '#6e592c',
+    overflow: 'hidden',
+  },
+  cell: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#1f170a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#746039',
+  },
+  moveCell: { backgroundColor: '#9a6726' },
+  captureCell: { backgroundColor: '#8e2d22' },
+  crossCell: { backgroundColor: '#32677d' },
+  diagonalCell: { backgroundColor: '#3c7048' },
+  selectedCell: { borderWidth: 2, borderColor: '#ffe534', backgroundColor: '#7d7132' },
   moveGlyph: { color: '#ffd676', fontSize: 18, fontWeight: '900', position: 'absolute', zIndex: 1 },
   pieceWrap: { width: '96%', height: '96%', alignItems: 'center', justifyContent: 'center' },
   cpuPiece: { transform: [{ rotate: '180deg' }] },
-  pieceArtwork: { width: '94%', height: '94%' },
-  militaryBadge: { position: 'absolute', bottom: 1, color: '#f7ed8d', backgroundColor: '#10150c', borderWidth: 1, borderColor: '#d9ca67', fontSize: 6.5, fontWeight: '900', paddingHorizontal: 2 },
-  shogiPiece: { width: '78%', height: '78%', alignItems: 'center', justifyContent: 'center', backgroundColor: '#d9b85f', borderWidth: 1.5, borderColor: '#543f15' },
-  kanji: { color: '#241906', fontSize: 20, fontWeight: '900' },
-  promoted: { position: 'absolute', right: -1, top: 0, color: '#fff', backgroundColor: '#b92f20', fontSize: 6, paddingHorizontal: 2 },
+  pieceArtwork: { width: '92%', height: '92%' },
+  militaryBadge: {
+    position: 'absolute',
+    bottom: 1,
+    color: '#f2e770',
+    backgroundColor: '#090b08',
+    borderWidth: 1,
+    borderColor: '#f2e770',
+    fontSize: 6,
+    fontWeight: '900',
+    paddingHorizontal: 2,
+  },
+  cpuBadge: { color: '#86cbff', borderColor: '#86cbff' },
+  shogiPiece: {
+    width: '78%',
+    height: '78%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#d7b860',
+    borderWidth: 1,
+    borderColor: '#543f15',
+  },
+  cpuShogiPiece: { backgroundColor: '#bdb1d8', borderColor: '#4a3f64' },
+  kanji: { color: '#151009', fontSize: 22, fontWeight: '900' },
+  promoted: { position: 'absolute', right: 1, top: 1, color: '#ff684e', backgroundColor: '#190402', fontSize: 6, paddingHorizontal: 2 },
+
+  gateMeter: {
+    alignSelf: 'center',
+    marginTop: 7,
+    marginBottom: 7,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#b44a31',
+    borderRadius: 4,
+    backgroundColor: '#1d0805',
+  },
+  gateText: { color: '#ff765e', fontSize: 11, letterSpacing: 0.5 },
+
   absoluteFill: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
   flashOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#fff5bf', zIndex: 50 },
   impact: { position: 'absolute', width: 44, height: 44, alignItems: 'center', justifyContent: 'center', zIndex: 60 },
   impactGlyph: { color: '#ffdf45', fontSize: 42, fontWeight: '900', textShadowColor: '#ff4b19', textShadowRadius: 10 },
+
   guideCrop: { overflow: 'hidden', backgroundColor: '#070904' },
-  miniGuide: { position: 'absolute', zIndex: 100, borderWidth: 2, borderColor: '#f6ef23', borderRadius: 10, overflow: 'hidden', shadowColor: '#f6ef23', shadowOpacity: 0.7, shadowRadius: 12, elevation: 12 },
-  miniGuideUpgrade: { position: 'absolute', right: 5, top: 5, color: '#fff', backgroundColor: '#b92f20', fontSize: 8, fontWeight: '900', paddingHorizontal: 4, paddingVertical: 2 },
-  statusPanel: { width: '100%', minHeight: 72, borderWidth: 1, borderColor: '#88392c', backgroundColor: '#050b0b', padding: 10 },
-  statusTitle: { color: '#e86b55', fontSize: 10, letterSpacing: 1.2 },
-  statusText: { color: '#98c9bb', marginTop: 8, fontSize: 12, letterSpacing: 1 },
-  bottomBar: { width: '100%', flexDirection: 'row', gap: 8 },
-  tool: { flex: 1, minHeight: 58, borderWidth: 1, borderColor: '#315b52', backgroundColor: '#07100f', alignItems: 'center', justifyContent: 'center' },
-  toolUnread: { borderColor: '#4cf0d0', shadowColor: '#4cf0d0', shadowOpacity: 0.5, shadowRadius: 8 },
-  toolText: { color: '#79d8c3', fontSize: 11, letterSpacing: 1 },
-  unreadDot: { position: 'absolute', right: 14, top: 11, width: 9, height: 9, borderRadius: 5, backgroundColor: '#ffe336', shadowColor: '#ffe336', shadowOpacity: 0.9, shadowRadius: 6 },
-  transmission: { position: 'absolute', left: 12, right: 12, bottom: 92, zIndex: 180, borderWidth: 1, borderColor: '#e55e47', backgroundColor: 'rgba(5,11,11,.96)', padding: 11, shadowColor: '#e55e47', shadowOpacity: 0.45, shadowRadius: 10, elevation: 20 },
+  miniGuide: {
+    position: 'absolute',
+    zIndex: 100,
+    borderWidth: 2,
+    borderColor: '#efd72c',
+    borderRadius: 9,
+    overflow: 'hidden',
+    backgroundColor: '#070907',
+    shadowColor: '#efd72c',
+    shadowOpacity: 0.45,
+    shadowRadius: 10,
+    elevation: 12,
+  },
+  miniGuideUpgrade: {
+    position: 'absolute',
+    right: 4,
+    top: 4,
+    color: '#fff',
+    backgroundColor: '#b92f20',
+    fontSize: 7,
+    fontWeight: '900',
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+
+  radioAlert: {
+    width: '100%',
+    marginTop: 8,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#18d9c7',
+    borderRadius: 5,
+    backgroundColor: '#032323',
+  },
+  radioAlertText: { color: '#76fff0', fontSize: 10 },
+  victoryAlert: { borderColor: '#ffe253', backgroundColor: '#261f04' },
+  victoryText: { color: '#ffe253' },
+
+  statusPanel: {
+    width: '100%',
+    minHeight: 64,
+    borderWidth: 1,
+    borderColor: '#38493d',
+    borderRadius: 5,
+    backgroundColor: '#050b0b',
+    padding: 10,
+    marginTop: 8,
+  },
+  statusTitle: { color: '#e86b55', fontSize: 9, letterSpacing: 1.1 },
+  statusText: { color: '#98c9bb', marginTop: 8, fontSize: 11, letterSpacing: 0.7 },
+
+  bottomSpacer: { height: 12 },
+
+  bottomBar: {
+    position: 'absolute',
+    bottom: 0,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#263528',
+    backgroundColor: '#020507',
+  },
+  tool: {
+    flex: 1,
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: '#274538',
+    borderRadius: 7,
+    backgroundColor: '#08100d',
+    flexDirection: 'row',
+    gap: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aiTool: { borderColor: '#176e80' },
+  toolUnread: { borderColor: '#4cf0d0' },
+  toolText: { color: '#8cd9b4', fontSize: 11 },
+  toolIcon: { color: '#8cd9b4', fontSize: 15 },
+  aiToolText: { color: '#63dfff' },
+  unreadDot: { position: 'absolute', right: 10, top: 8, width: 8, height: 8, borderRadius: 4, backgroundColor: '#ffe336' },
+
+  transmission: {
+    position: 'absolute',
+    bottom: 72,
+    zIndex: 180,
+    borderWidth: 1,
+    borderColor: '#e55e47',
+    backgroundColor: '#050b0b',
+    padding: 11,
+    borderRadius: 5,
+    elevation: 20,
+  },
   transmissionHead: { flexDirection: 'row', justifyContent: 'space-between', gap: 8, marginBottom: 6 },
-  transmissionTitle: { color: '#ff7960', fontSize: 10, fontWeight: '900', letterSpacing: 1.4 },
+  transmissionTitle: { color: '#ff7960', fontSize: 10, fontWeight: '900', letterSpacing: 1.2 },
   transmissionEval: { color: '#d9b85f', fontSize: 9, fontWeight: '800' },
   transmissionText: { color: '#b9ddd4', fontSize: 11, lineHeight: 16, marginTop: 2 },
-  transmissionHint: { color: '#647f78', fontSize: 7, letterSpacing: 1.2, marginTop: 7 },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,.62)', justifyContent: 'flex-end' },
-  sheet: { backgroundColor: '#07100f', borderTopWidth: 1, borderColor: '#3a6c60', padding: 16, paddingBottom: 28, alignItems: 'center' },
-  sheetHandle: { width: 50, height: 4, borderRadius: 3, backgroundColor: '#58756d', marginBottom: 12 },
-  sheetHeading: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  sheetTitle: { color: '#8ff6dc', fontSize: 14, fontWeight: '800', letterSpacing: 2 },
-  closeText: { color: '#8ff6dc', fontSize: 28, lineHeight: 30 },
+  transmissionHint: { color: '#647f78', fontSize: 7, letterSpacing: 1.1, marginTop: 7 },
+
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,.62)', justifyContent: 'flex-end', alignItems: 'center' },
+  sheet: {
+    maxHeight: '78%',
+    backgroundColor: '#07100f',
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: '#506039',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 24,
+    alignItems: 'center',
+  },
+  sheetHandle: { width: 46, height: 4, borderRadius: 3, backgroundColor: '#506052', marginBottom: 10 },
+  sheetHeading: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  sheetTitle: { color: '#e1d867', fontSize: 13, fontWeight: '800', letterSpacing: 1.5 },
+  closeText: { color: '#889184', fontSize: 26, lineHeight: 30 },
   fullGuideWrap: { position: 'relative', backgroundColor: '#050704' },
   fullGuideHighlight: { position: 'absolute', borderWidth: 3, borderColor: '#f6ef23', backgroundColor: 'rgba(246,239,35,.08)' },
+
   advisorBody: { width: '100%', gap: 12 },
-  advisorState: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: '#284e46', backgroundColor: '#050b0b', padding: 10 },
-  advisorSource: { color: '#79d8c3', fontSize: 9, letterSpacing: 1.2 },
-  advisorEvaluation: { color: '#d9b85f', fontSize: 10, fontWeight: '900' },
-  advisorCopy: { minHeight: 70, borderWidth: 1, borderColor: '#51352f', backgroundColor: '#090b0a', padding: 11, gap: 7 },
-  advisorText: { color: '#c0ddd6', fontSize: 12, lineHeight: 18 },
-  advisorEmpty: { color: '#809e96', fontSize: 11, lineHeight: 17, paddingVertical: 10 },
-  analyzeButton: { borderWidth: 1, borderColor: '#4cf0d0', backgroundColor: '#102c26', paddingVertical: 13, alignItems: 'center' },
-  analyzeDisabled: { opacity: 0.4 },
-  analyzeText: { color: '#8fffe3', fontSize: 11, fontWeight: '900', letterSpacing: 1.6 },
-  settingsBody: { width: '100%', gap: 10 },
-  settingLabel: { color: '#71968b', fontSize: 9, letterSpacing: 1.5, marginTop: 4 },
-  settingSegment: { flexDirection: 'row', gap: 8 },
-  settingButton: { flex: 1, borderWidth: 1, borderColor: '#315b52', paddingVertical: 12, alignItems: 'center', backgroundColor: '#0b1513' },
-  settingActive: { borderColor: '#71f0d4', backgroundColor: '#14392f' },
-  settingButtonText: { color: '#9ad7c8', fontSize: 10, fontWeight: '700', letterSpacing: 1 },
-  resetButton: { marginTop: 10, borderWidth: 1, borderColor: '#a74534', backgroundColor: '#220c09', paddingVertical: 14, alignItems: 'center' },
-  resetText: { color: '#ff7860', fontWeight: '800', letterSpacing: 1.4 },
+  advisorState: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#284e46',
+    backgroundColor: '#050b0b',
+    padding: 10,
+  },
+  advisorSource: { color: '#54f3a5', fontSize: 10 },
+  advisorEvaluation: { color: '#f0e35b', fontSize: 10, fontWeight: '800' },
+  advisorCopy: { borderWidth: 1, borderColor: '#253d35', backgroundColor: '#050807', padding: 11, gap: 8 },
+  advisorText: { color: '#cbe0d4', lineHeight: 20, fontSize: 12 },
+  advisorEmpty: { color: '#cbe0d4', lineHeight: 20, fontSize: 12 },
+  analyzeButton: {
+    width: '100%',
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: '#1fd57c',
+    borderRadius: 5,
+    backgroundColor: '#082418',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  analyzeDisabled: { opacity: 0.55 },
+  analyzeText: { color: '#58f9a8', fontWeight: '800', letterSpacing: 0.5 },
+
+  settingsBody: { width: '100%', gap: 9 },
+  settingLabel: { color: '#8f9a7e', fontSize: 10, marginTop: 4 },
+  settingSegment: { width: '100%', flexDirection: 'row', gap: 5 },
+  resetButton: {
+    width: '100%',
+    minHeight: 44,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#c64a3a',
+    borderRadius: 5,
+    backgroundColor: '#230806',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resetText: { color: '#ff806d', fontWeight: '800' },
 });
