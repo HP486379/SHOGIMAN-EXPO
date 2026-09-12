@@ -23,6 +23,7 @@ import {
   HandPieces,
   Piece,
   PieceType,
+  Player,
   Position,
 } from './src/types/shogi';
 import { createInitialBoard } from './src/utils/initialBoard';
@@ -39,6 +40,8 @@ import {
 import { chooseCpuMove } from './src/utils/cpuPlayer';
 import { getBattlefieldPieceTypeIcon, getBattlefieldUnitIcon } from './src/assets/battlefieldUnitIcons';
 import { UNIT_GUIDE_PANEL_IMAGE } from './src/assets/unitGuidePanelImage';
+import { useExpoAdvisor } from './src/hooks/useExpoAdvisor';
+import { OpenAiAdvice } from './src/utils/openAiAdvisor';
 
 const MILITARY: Record<PieceType, string> = {
   pawn: 'INF', lance: 'ART', knight: 'DRN', silver: 'SPC', gold: 'GRD', bishop: 'RKT', rook: 'TNK', king: 'HQ',
@@ -67,8 +70,9 @@ const GUIDE_REGION: Record<PieceType, { left: number; top: number }> = {
 const EMPTY_HANDS: HandPieces = { black: [], white: [] };
 const samePos = (a: Position | null, b: Position) => !!a && a.row === b.row && a.col === b.col;
 
-type Sheet = 'guide' | 'settings' | null;
+type Sheet = 'ai' | 'guide' | 'settings' | null;
 type MiniGuideState = { piece: Piece; pos: Position } | null;
+type AdvisorSource = 'idle' | 'loading' | 'openai' | 'error';
 
 function svgXmlFromDataUri(uri: string): string {
   const comma = uri.indexOf(',');
@@ -81,7 +85,7 @@ function removeOne(items: PieceType[], target: PieceType): PieceType[] {
   return [...items.slice(0, index), ...items.slice(index + 1)];
 }
 
-function nextHandsAfterMove(board: BoardGrid, hands: HandPieces, move: GameMove, player: 'black' | 'white'): HandPieces {
+function nextHandsAfterMove(board: BoardGrid, hands: HandPieces, move: GameMove, player: Player): HandPieces {
   const next = cloneHands(hands);
   if (move.dropPiece) {
     next[player] = removeOne(next[player], move.dropPiece);
@@ -112,7 +116,8 @@ export default function App() {
   const [moveCount, setMoveCount] = useState(0);
   const [message, setMessage] = useState('1P READY');
   const [cpuThinking, setCpuThinking] = useState(false);
-  const [winner, setWinner] = useState<'black' | 'white' | null>(null);
+  const [winner, setWinner] = useState<Player | null>(null);
+  const [lastMovePlayer, setLastMovePlayer] = useState<Player | null>(null);
   const [impactPos, setImpactPos] = useState<Position | null>(null);
   const [miniGuide, setMiniGuide] = useState<MiniGuideState>(null);
   const [sheet, setSheet] = useState<Sheet>(null);
@@ -134,7 +139,15 @@ export default function App() {
     return piece ? getLegalMoveEffects(board, hands, selected, piece) : [];
   }, [board, hands, selected, selectedHandPiece]);
 
+  const checkPlayer = useMemo(() => getCheckStatus(board), [board]);
+  const advisor = useExpoAdvisor({ board, hands, moveCount, cpuThinking, winner, checkPlayer, lastMovePlayer });
   const activeGuideType = selectedHandPiece ?? miniGuide?.piece.type ?? (selected ? board[selected.row]?.[selected.col]?.type ?? null : null);
+
+  const openAi = () => {
+    advisor.markRead();
+    advisor.dismissTransmission();
+    setSheet('ai');
+  };
 
   const showMiniGuide = (piece: Piece, pos: Position) => {
     if (mode !== 'military') return;
@@ -176,6 +189,7 @@ export default function App() {
     setMoveCount(0);
     setCpuThinking(false);
     setWinner(null);
+    setLastMovePlayer(null);
     setImpactPos(null);
     setMiniGuide(null);
     setMessage('1P READY');
@@ -191,6 +205,7 @@ export default function App() {
     setBoard(nextBoard);
     setHands(nextHands);
     setMoveCount((v) => v + 1);
+    setLastMovePlayer('white');
     setCpuThinking(false);
     setWinner(nextWinner);
     if (nextWinner === 'white') setMessage('HQ LOST · CPU VICTORY');
@@ -233,6 +248,7 @@ export default function App() {
     setSelectedHandPiece(null);
     setMiniGuide(null);
     setMoveCount((v) => v + 1);
+    setLastMovePlayer('black');
     setWinner(nextWinner);
     if (nextWinner) {
       setMessage(nextWinner === 'black' ? 'CPU HQ LOST · 1P VICTORY' : 'HQ LOST · CPU VICTORY');
@@ -369,16 +385,31 @@ export default function App() {
         <HandRow title="1P CAPTURED" items={hands.black} mode={mode} selected={selectedHandPiece} onSelect={selectHand} />
 
         <View style={styles.statusPanel}>
-          <Text style={styles.statusTitle}>TACTIC CHANNEL</Text>
+          <Text style={styles.statusTitle}>TACTIC CHANNEL · {advisor.evaluation}</Text>
           <Text style={styles.statusText}>{message}</Text>
         </View>
 
         <View style={styles.bottomBar}>
-          <Pressable style={styles.tool}><Text style={styles.toolText}>◆ AI</Text></Pressable>
+          <Pressable style={[styles.tool, advisor.unread && styles.toolUnread]} onPress={openAi}>
+            <Text style={styles.toolText}>◆ AI</Text>
+            {advisor.unread ? <View style={styles.unreadDot} /> : null}
+          </Pressable>
           <Pressable style={styles.tool} onPress={() => setSheet('guide')}><Text style={styles.toolText}>▣ GUIDE</Text></Pressable>
           <Pressable style={styles.tool} onPress={() => setSheet('settings')}><Text style={styles.toolText}>⚙ SET</Text></Pressable>
         </View>
       </ScrollView>
+
+      {advisor.transmission ? (
+        <Pressable style={styles.transmission} onPress={openAi}>
+          <View style={styles.transmissionHead}>
+            <Text style={styles.transmissionTitle}>⚡ TACTIC ADVISOR</Text>
+            <Text style={styles.transmissionEval}>{advisor.evaluation}</Text>
+          </View>
+          <Text style={styles.transmissionText}>{advisor.transmission.summary}</Text>
+          {advisor.transmission.bullets[0] ? <Text style={styles.transmissionText}>{advisor.transmission.bullets[0]}</Text> : null}
+          <Text style={styles.transmissionHint}>TAP TO OPEN · AUTO CLOSE</Text>
+        </Pressable>
+      ) : null}
 
       <SheetModal
         sheet={sheet}
@@ -390,6 +421,13 @@ export default function App() {
         reset={() => { reset(); setSheet(null); }}
         activeGuideType={activeGuideType}
         width={width}
+        advisor={{
+          evaluation: advisor.evaluation,
+          latestAdvice: advisor.latestAdvice,
+          source: advisor.source,
+          analyze: advisor.analyze,
+          canAnalyze: !cpuThinking && !winner,
+        }}
       />
     </SafeAreaView>
   );
@@ -525,6 +563,7 @@ function SheetModal({
   reset,
   activeGuideType,
   width,
+  advisor,
 }: {
   sheet: Sheet;
   onClose: () => void;
@@ -535,20 +574,54 @@ function SheetModal({
   reset: () => void;
   activeGuideType: PieceType | null;
   width: number;
+  advisor: {
+    evaluation: string;
+    latestAdvice: OpenAiAdvice | null;
+    source: AdvisorSource;
+    analyze: () => void;
+    canAnalyze: boolean;
+  };
 }) {
   const guideWidth = Math.min(width - 34, 420);
   const guideHeight = guideWidth * GUIDE_SOURCE_RATIO;
   const region = activeGuideType ? GUIDE_REGION[activeGuideType] : null;
+  const sourceLabel = advisor.source === 'loading' ? 'ANALYZING...'
+    : advisor.source === 'openai' ? 'GPT-5.4 MINI'
+      : advisor.source === 'error' ? 'API ERR' : 'STANDBY';
+  const title = sheet === 'ai' ? 'AI TACTIC ADVISOR' : sheet === 'guide' ? 'UNIT GUIDE' : 'SETTINGS';
+
   return (
     <Modal visible={sheet !== null} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.modalBackdrop} onPress={onClose}>
         <Pressable style={styles.sheet} onPress={() => undefined}>
           <View style={styles.sheetHandle} />
           <View style={styles.sheetHeading}>
-            <Text style={styles.sheetTitle}>{sheet === 'guide' ? 'UNIT GUIDE' : 'SETTINGS'}</Text>
+            <Text style={styles.sheetTitle}>{title}</Text>
             <Pressable onPress={onClose}><Text style={styles.closeText}>×</Text></Pressable>
           </View>
-          {sheet === 'guide' ? (
+          {sheet === 'ai' ? (
+            <View style={styles.advisorBody}>
+              <View style={styles.advisorState}>
+                <Text style={styles.advisorSource}>{sourceLabel}</Text>
+                <Text style={styles.advisorEvaluation}>{advisor.evaluation}</Text>
+              </View>
+              {advisor.latestAdvice ? (
+                <View style={styles.advisorCopy}>
+                  <Text style={styles.advisorText}>{advisor.latestAdvice.summary}</Text>
+                  {advisor.latestAdvice.bullets[0] ? <Text style={styles.advisorText}>{advisor.latestAdvice.bullets[0]}</Text> : null}
+                </View>
+              ) : (
+                <Text style={styles.advisorEmpty}>重要な局面変化を検知した時だけAI参謀が自動介入します。必要ならANALYZEで現在局面を確認できます。</Text>
+              )}
+              <Pressable
+                disabled={!advisor.canAnalyze || advisor.source === 'loading'}
+                onPress={advisor.analyze}
+                style={[styles.analyzeButton, (!advisor.canAnalyze || advisor.source === 'loading') && styles.analyzeDisabled]}
+              >
+                <Text style={styles.analyzeText}>{advisor.source === 'loading' ? 'ANALYZING...' : 'ANALYZE'}</Text>
+              </Pressable>
+            </View>
+          ) : sheet === 'guide' ? (
             <View style={[styles.fullGuideWrap, { width: guideWidth, height: guideHeight }]}>
               <Image source={{ uri: UNIT_GUIDE_PANEL_IMAGE }} resizeMode="stretch" style={styles.absoluteFill} />
               {region ? (
@@ -644,11 +717,19 @@ const styles = StyleSheet.create({
   miniGuide: { position: 'absolute', zIndex: 100, borderWidth: 2, borderColor: '#f6ef23', borderRadius: 10, overflow: 'hidden', shadowColor: '#f6ef23', shadowOpacity: 0.7, shadowRadius: 12, elevation: 12 },
   miniGuideUpgrade: { position: 'absolute', right: 5, top: 5, color: '#fff', backgroundColor: '#b92f20', fontSize: 8, fontWeight: '900', paddingHorizontal: 4, paddingVertical: 2 },
   statusPanel: { width: '100%', minHeight: 72, borderWidth: 1, borderColor: '#88392c', backgroundColor: '#050b0b', padding: 10 },
-  statusTitle: { color: '#e86b55', fontSize: 10, letterSpacing: 2 },
+  statusTitle: { color: '#e86b55', fontSize: 10, letterSpacing: 1.2 },
   statusText: { color: '#98c9bb', marginTop: 8, fontSize: 12, letterSpacing: 1 },
   bottomBar: { width: '100%', flexDirection: 'row', gap: 8 },
   tool: { flex: 1, minHeight: 58, borderWidth: 1, borderColor: '#315b52', backgroundColor: '#07100f', alignItems: 'center', justifyContent: 'center' },
+  toolUnread: { borderColor: '#4cf0d0', shadowColor: '#4cf0d0', shadowOpacity: 0.5, shadowRadius: 8 },
   toolText: { color: '#79d8c3', fontSize: 11, letterSpacing: 1 },
+  unreadDot: { position: 'absolute', right: 14, top: 11, width: 9, height: 9, borderRadius: 5, backgroundColor: '#ffe336', shadowColor: '#ffe336', shadowOpacity: 0.9, shadowRadius: 6 },
+  transmission: { position: 'absolute', left: 12, right: 12, bottom: 92, zIndex: 180, borderWidth: 1, borderColor: '#e55e47', backgroundColor: 'rgba(5,11,11,.96)', padding: 11, shadowColor: '#e55e47', shadowOpacity: 0.45, shadowRadius: 10, elevation: 20 },
+  transmissionHead: { flexDirection: 'row', justifyContent: 'space-between', gap: 8, marginBottom: 6 },
+  transmissionTitle: { color: '#ff7960', fontSize: 10, fontWeight: '900', letterSpacing: 1.4 },
+  transmissionEval: { color: '#d9b85f', fontSize: 9, fontWeight: '800' },
+  transmissionText: { color: '#b9ddd4', fontSize: 11, lineHeight: 16, marginTop: 2 },
+  transmissionHint: { color: '#647f78', fontSize: 7, letterSpacing: 1.2, marginTop: 7 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,.62)', justifyContent: 'flex-end' },
   sheet: { backgroundColor: '#07100f', borderTopWidth: 1, borderColor: '#3a6c60', padding: 16, paddingBottom: 28, alignItems: 'center' },
   sheetHandle: { width: 50, height: 4, borderRadius: 3, backgroundColor: '#58756d', marginBottom: 12 },
@@ -657,6 +738,16 @@ const styles = StyleSheet.create({
   closeText: { color: '#8ff6dc', fontSize: 28, lineHeight: 30 },
   fullGuideWrap: { position: 'relative', backgroundColor: '#050704' },
   fullGuideHighlight: { position: 'absolute', borderWidth: 3, borderColor: '#f6ef23', backgroundColor: 'rgba(246,239,35,.08)' },
+  advisorBody: { width: '100%', gap: 12 },
+  advisorState: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: '#284e46', backgroundColor: '#050b0b', padding: 10 },
+  advisorSource: { color: '#79d8c3', fontSize: 9, letterSpacing: 1.2 },
+  advisorEvaluation: { color: '#d9b85f', fontSize: 10, fontWeight: '900' },
+  advisorCopy: { minHeight: 70, borderWidth: 1, borderColor: '#51352f', backgroundColor: '#090b0a', padding: 11, gap: 7 },
+  advisorText: { color: '#c0ddd6', fontSize: 12, lineHeight: 18 },
+  advisorEmpty: { color: '#809e96', fontSize: 11, lineHeight: 17, paddingVertical: 10 },
+  analyzeButton: { borderWidth: 1, borderColor: '#4cf0d0', backgroundColor: '#102c26', paddingVertical: 13, alignItems: 'center' },
+  analyzeDisabled: { opacity: 0.4 },
+  analyzeText: { color: '#8fffe3', fontSize: 11, fontWeight: '900', letterSpacing: 1.6 },
   settingsBody: { width: '100%', gap: 10 },
   settingLabel: { color: '#71968b', fontSize: 9, letterSpacing: 1.5, marginTop: 4 },
   settingSegment: { flexDirection: 'row', gap: 8 },
