@@ -2,6 +2,7 @@ import React from 'react';
 import { View } from 'react-native';
 import { getShogimanHtml } from './src/shogimanHtml';
 
+// Web preview renders the exact bundled SHOGIMAN-IOS application, not a React Native redraw.
 export default function App() {
   return (
     <View style={{ flex: 1, width: '100%', backgroundColor: '#030507' }}>
