@@ -30,7 +30,7 @@ jobs:
         run: npm run sync:ios-ui
       - name: Commit generated HTML bundle
         run: |
-          if git diff --quiet -- src/generated/shogimanIosHtml.ts; then
+          if [ -z "$(git status --porcelain -- src/generated/shogimanIosHtml.ts)" ]; then
             echo "Bundle already up to date."
             exit 0
           fi
