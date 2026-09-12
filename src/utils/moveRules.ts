@@ -4,6 +4,29 @@ type Direction = [number, number];
 const inBounds = (row: number, col: number) => row >= 0 && row < 9 && col >= 0 && col < 9;
 const forward = (player: Player) => player === 'black' ? -1 : 1;
 
+export function canPromotePiece(piece: Piece): boolean {
+  return !piece.promoted && piece.type !== 'king' && piece.type !== 'gold';
+}
+
+export function isPromotionZone(player: Player, row: number): boolean {
+  return player === 'black' ? row <= 2 : row >= 6;
+}
+
+export function moveTouchesPromotionZone(piece: Piece, from: Position, to: Position): boolean {
+  return canPromotePiece(piece) && (isPromotionZone(piece.player, from.row) || isPromotionZone(piece.player, to.row));
+}
+
+export function mustPromote(piece: Piece, to: Position): boolean {
+  if (!canPromotePiece(piece)) return false;
+  if (piece.type === 'pawn' || piece.type === 'lance') return piece.player === 'black' ? to.row === 0 : to.row === 8;
+  if (piece.type === 'knight') return piece.player === 'black' ? to.row <= 1 : to.row >= 7;
+  return false;
+}
+
+export function promotePiece(piece: Piece): Piece {
+  return canPromotePiece(piece) ? { ...piece, promoted: true } : piece;
+}
+
 function stepDirs(type: PieceType, player: Player, promoted?: boolean): Direction[] {
   const f = forward(player);
   if (promoted && ['silver', 'knight', 'lance', 'pawn'].includes(type)) return [[f,-1],[f,0],[f,1],[0,-1],[0,1],[-f,0]];
