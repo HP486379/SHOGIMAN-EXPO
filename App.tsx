@@ -550,7 +550,7 @@ function SheetModal({
           </View>
           {sheet === 'guide' ? (
             <View style={[styles.fullGuideWrap, { width: guideWidth, height: guideHeight }]}>
-              <Image source={{ uri: UNIT_GUIDE_PANEL_IMAGE }} resizeMode="stretch" style={StyleSheet.absoluteFillObject} />
+              <Image source={{ uri: UNIT_GUIDE_PANEL_IMAGE }} resizeMode="stretch" style={styles.absoluteFill} />
               {region ? (
                 <View
                   pointerEvents="none"
@@ -636,7 +636,8 @@ const styles = StyleSheet.create({
   shogiPiece: { width: '78%', height: '78%', alignItems: 'center', justifyContent: 'center', backgroundColor: '#d9b85f', borderWidth: 1.5, borderColor: '#543f15' },
   kanji: { color: '#241906', fontSize: 20, fontWeight: '900' },
   promoted: { position: 'absolute', right: -1, top: 0, color: '#fff', backgroundColor: '#b92f20', fontSize: 6, paddingHorizontal: 2 },
-  flashOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: '#fff5bf', zIndex: 50 },
+  absoluteFill: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
+  flashOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#fff5bf', zIndex: 50 },
   impact: { position: 'absolute', width: 44, height: 44, alignItems: 'center', justifyContent: 'center', zIndex: 60 },
   impactGlyph: { color: '#ffdf45', fontSize: 42, fontWeight: '900', textShadowColor: '#ff4b19', textShadowRadius: 10 },
   guideCrop: { overflow: 'hidden', backgroundColor: '#070904' },
