@@ -1,11 +1,11 @@
 import React from 'react';
-import { SafeAreaView, StatusBar, StyleSheet } from 'react-native';
+import { StatusBar, StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { getShogimanHtml } from './src/shogimanHtml';
 
 export default function App() {
   return (
-    <SafeAreaView style={styles.root}>
+    <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor="#030507" />
       <WebView
         originWhitelist={['*']}
@@ -13,14 +13,21 @@ export default function App() {
         javaScriptEnabled
         domStorageEnabled
         allowsInlineMediaPlayback
+        mediaPlaybackRequiresUserAction={false}
         setSupportMultipleWindows={false}
+        overScrollMode="never"
+        bounces={false}
+        automaticallyAdjustContentInsets={false}
+        contentInsetAdjustmentBehavior="never"
         style={styles.webview}
+        containerStyle={styles.webviewContainer}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#030507' },
+  webviewContainer: { flex: 1, backgroundColor: '#030507' },
   webview: { flex: 1, backgroundColor: '#030507' },
 });
