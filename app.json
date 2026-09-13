@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "SHOGI FRONTLINE",
+    "slug": "shogiman-expo",
+    "owner": "wezard17301",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": false
+    },
+    "extra": {
+      "eas": {
+        "projectId": "b464a5fa-69da-476e-a59f-e6e55d5848fd"
+      }
+    }
+  }
+}
