@@ -3,5 +3,8 @@
   "compilerOptions": {
     "strict": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "reference/shogiman-ios"
+  ]
 }
