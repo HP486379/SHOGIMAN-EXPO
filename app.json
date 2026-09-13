@@ -17,6 +17,9 @@
         "projectId": "b464a5fa-69da-476e-a59f-e6e55d5848fd"
       }
     },
-    "owner": "wezard17301"
+    "owner": "wezard17301",
+    "plugins": [
+      "expo-audio"
+    ]
   }
 }
