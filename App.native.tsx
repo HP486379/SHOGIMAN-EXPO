@@ -5,6 +5,8 @@ import { getInjectedAdviceBridgeScript } from './src/injectedAdviceBridge';
 import { getInjectedAudioScript } from './src/injectedAudio';
 import { getShogimanHtml } from './src/shogimanHtml';
 
+const NativeWebView = WebView as unknown as React.ComponentClass<any>;
+
 interface AdviceBridgeRequest {
   type: 'shogiman-advice-request';
   id: string;
@@ -18,6 +20,14 @@ interface AdviceBridgeResponse {
   status?: number;
   body?: string;
   error?: string;
+}
+
+interface WebViewHandle {
+  injectJavaScript(script: string): void;
+}
+
+interface WebViewMessageLike {
+  nativeEvent: { data: string };
 }
 
 function parseAdviceBridgeRequest(data: string): AdviceBridgeRequest | null {
@@ -46,7 +56,7 @@ function serializeForInjectedJavaScript(value: unknown) {
 
 export default function App() {
   const [hasStarted, setHasStarted] = useState(false);
-  const webViewRef = useRef<WebView>(null);
+  const webViewRef = useRef<WebViewHandle | null>(null);
   const adviceApiUrl = process.env.EXPO_PUBLIC_ADVICE_API_URL;
 
   function sendAdviceBridgeResponse(payload: AdviceBridgeResponse) {
@@ -116,8 +126,8 @@ export default function App() {
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor="#030507" />
-      <WebView
-        ref={webViewRef}
+      <NativeWebView
+        ref={webViewRef as any}
         originWhitelist={['*']}
         source={{ html: getShogimanHtml(), baseUrl: 'https://shogiman.local/' }}
         javaScriptEnabled
@@ -126,7 +136,7 @@ export default function App() {
         mediaPlaybackRequiresUserAction={false}
         injectedJavaScriptBeforeContentLoaded={getInjectedAdviceBridgeScript()}
         injectedJavaScript={getInjectedAudioScript()}
-        onMessage={(event) => { void handleWebViewMessage(event.nativeEvent.data); }}
+        onMessage={(event: WebViewMessageLike) => { void handleWebViewMessage(event.nativeEvent.data); }}
         setSupportMultipleWindows={false}
         overScrollMode="never"
         bounces={false}
