@@ -1,13 +1,14 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import { WebView } from 'react-native-webview';
 import { getInjectedAdviceBridgeScript } from './src/injectedAdviceBridge';
-import { getInjectedAudioScript } from './src/injectedAudio';
 import { getInjectedNativeEventsScript } from './src/injectedNativeEvents';
 import { getShogimanHtml } from './src/shogimanHtml';
 
 const NativeWebView = WebView as unknown as React.ComponentClass<any>;
+const BGM_SOURCE = require('./assets/audio/frontline_command_v4_heroic.m4a');
 
 interface AdviceBridgeRequest {
   type: 'shogiman-advice-request';
@@ -77,6 +78,23 @@ export default function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const webViewRef = useRef<WebViewHandle | null>(null);
   const adviceApiUrl = process.env.EXPO_PUBLIC_ADVICE_API_URL;
+  const bgmPlayer = useAudioPlayer(BGM_SOURCE, { downloadFirst: true });
+
+  useEffect(() => {
+    void setAudioModeAsync({
+      playsInSilentMode: true,
+      shouldPlayInBackground: false,
+      interruptionMode: 'doNotMix',
+    });
+
+    bgmPlayer.loop = true;
+    bgmPlayer.volume = 0.42;
+  }, [bgmPlayer]);
+
+  function startGame() {
+    bgmPlayer.play();
+    setHasStarted(true);
+  }
 
   function sendAdviceBridgeResponse(payload: AdviceBridgeResponse) {
     const serialized = serializeForInjectedJavaScript(payload);
@@ -136,7 +154,7 @@ export default function App() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="ゲーム開始"
-              onPress={() => setHasStarted(true)}
+              onPress={startGame}
               style={({ pressed }) => [styles.startButton, pressed && styles.startButtonPressed]}
             >
               <Text style={styles.startButtonText}>START</Text>
@@ -147,8 +165,6 @@ export default function App() {
       </View>
     );
   }
-
-  const injectedRuntimeScript = `${getInjectedAudioScript()}\n${getInjectedNativeEventsScript()}`;
 
   return (
     <View style={styles.root}>
@@ -162,7 +178,7 @@ export default function App() {
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
         injectedJavaScriptBeforeContentLoaded={getInjectedAdviceBridgeScript()}
-        injectedJavaScript={injectedRuntimeScript}
+        injectedJavaScript={getInjectedNativeEventsScript()}
         onMessage={(event: WebViewMessageLike) => { void handleWebViewMessage(event.nativeEvent.data); }}
         setSupportMultipleWindows={false}
         overScrollMode="never"
