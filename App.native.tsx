@@ -1,11 +1,93 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { getInjectedAdviceBridgeScript } from './src/injectedAdviceBridge';
 import { getInjectedAudioScript } from './src/injectedAudio';
 import { getShogimanHtml } from './src/shogimanHtml';
 
+interface AdviceBridgeRequest {
+  type: 'shogiman-advice-request';
+  id: string;
+  method?: string;
+  body?: string | null;
+}
+
+interface AdviceBridgeResponse {
+  id: string;
+  ok?: boolean;
+  status?: number;
+  body?: string;
+  error?: string;
+}
+
+function parseAdviceBridgeRequest(data: string): AdviceBridgeRequest | null {
+  try {
+    const value: unknown = JSON.parse(data);
+    if (!value || typeof value !== 'object') return null;
+    const record = value as Record<string, unknown>;
+    if (record.type !== 'shogiman-advice-request' || typeof record.id !== 'string') return null;
+    return {
+      type: 'shogiman-advice-request',
+      id: record.id,
+      method: typeof record.method === 'string' ? record.method : 'POST',
+      body: typeof record.body === 'string' ? record.body : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function serializeForInjectedJavaScript(value: unknown) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
 export default function App() {
   const [hasStarted, setHasStarted] = useState(false);
+  const webViewRef = useRef<WebView>(null);
+  const adviceApiUrl = process.env.EXPO_PUBLIC_ADVICE_API_URL;
+
+  function sendAdviceBridgeResponse(payload: AdviceBridgeResponse) {
+    const serialized = serializeForInjectedJavaScript(payload);
+    webViewRef.current?.injectJavaScript(
+      `window.__shogimanResolveAdvice && window.__shogimanResolveAdvice(${serialized}); true;`,
+    );
+  }
+
+  async function handleWebViewMessage(data: string) {
+    const request = parseAdviceBridgeRequest(data);
+    if (!request) return;
+
+    if (!adviceApiUrl || !adviceApiUrl.startsWith('https://')) {
+      sendAdviceBridgeResponse({
+        id: request.id,
+        error: 'EXPO_PUBLIC_ADVICE_API_URL is not configured',
+      });
+      return;
+    }
+
+    try {
+      const response = await fetch(adviceApiUrl, {
+        method: request.method || 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: request.body ?? undefined,
+      });
+      const body = await response.text();
+      sendAdviceBridgeResponse({
+        id: request.id,
+        ok: response.ok,
+        status: response.status,
+        body,
+      });
+    } catch (error) {
+      sendAdviceBridgeResponse({
+        id: request.id,
+        error: error instanceof Error ? error.message : 'AI advisor request failed',
+      });
+    }
+  }
 
   if (!hasStarted) {
     return (
@@ -35,13 +117,16 @@ export default function App() {
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor="#030507" />
       <WebView
+        ref={webViewRef}
         originWhitelist={['*']}
         source={{ html: getShogimanHtml(), baseUrl: 'https://shogiman.local/' }}
         javaScriptEnabled
         domStorageEnabled
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
+        injectedJavaScriptBeforeContentLoaded={getInjectedAdviceBridgeScript()}
         injectedJavaScript={getInjectedAudioScript()}
+        onMessage={(event) => { void handleWebViewMessage(event.nativeEvent.data); }}
         setSupportMultipleWindows={false}
         overScrollMode="never"
         bounces={false}
