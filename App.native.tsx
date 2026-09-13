@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { getInjectedAudioScript } from './src/injectedAudio';
 import { getShogimanHtml } from './src/shogimanHtml';
 
 export default function App() {
@@ -40,6 +41,7 @@ export default function App() {
         domStorageEnabled
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
+        injectedJavaScript={getInjectedAudioScript()}
         setSupportMultipleWindows={false}
         overScrollMode="never"
         bounces={false}
