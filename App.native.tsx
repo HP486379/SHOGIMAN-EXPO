@@ -4,6 +4,7 @@ import * as Haptics from 'expo-haptics';
 import { WebView } from 'react-native-webview';
 import { getInjectedAdviceBridgeScript } from './src/injectedAdviceBridge';
 import { getInjectedAudioScript } from './src/injectedAudio';
+import { getInjectedNativeEventsScript } from './src/injectedNativeEvents';
 import { getShogimanHtml } from './src/shogimanHtml';
 
 const NativeWebView = WebView as unknown as React.ComponentClass<any>;
@@ -147,6 +148,8 @@ export default function App() {
     );
   }
 
+  const injectedRuntimeScript = `${getInjectedAudioScript()}\n${getInjectedNativeEventsScript()}`;
+
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor="#030507" />
@@ -159,7 +162,7 @@ export default function App() {
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
         injectedJavaScriptBeforeContentLoaded={getInjectedAdviceBridgeScript()}
-        injectedJavaScript={getInjectedAudioScript()}
+        injectedJavaScript={injectedRuntimeScript}
         onMessage={(event: WebViewMessageLike) => { void handleWebViewMessage(event.nativeEvent.data); }}
         setSupportMultipleWindows={false}
         overScrollMode="never"
