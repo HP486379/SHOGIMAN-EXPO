@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { WebView } from 'react-native-webview';
 import { getInjectedAdviceBridgeScript } from './src/injectedAdviceBridge';
 import { getInjectedAudioScript } from './src/injectedAudio';
@@ -22,6 +23,11 @@ interface AdviceBridgeResponse {
   error?: string;
 }
 
+interface NativeGameEvent {
+  type: 'shogiman-native-event';
+  event: 'capture';
+}
+
 interface WebViewHandle {
   injectJavaScript(script: string): void;
 }
@@ -30,21 +36,33 @@ interface WebViewMessageLike {
   nativeEvent: { data: string };
 }
 
-function parseAdviceBridgeRequest(data: string): AdviceBridgeRequest | null {
+function parseJsonRecord(data: string): Record<string, unknown> | null {
   try {
     const value: unknown = JSON.parse(data);
     if (!value || typeof value !== 'object') return null;
-    const record = value as Record<string, unknown>;
-    if (record.type !== 'shogiman-advice-request' || typeof record.id !== 'string') return null;
-    return {
-      type: 'shogiman-advice-request',
-      id: record.id,
-      method: typeof record.method === 'string' ? record.method : 'POST',
-      body: typeof record.body === 'string' ? record.body : null,
-    };
+    return value as Record<string, unknown>;
   } catch {
     return null;
   }
+}
+
+function parseAdviceBridgeRequest(data: string): AdviceBridgeRequest | null {
+  const record = parseJsonRecord(data);
+  if (!record) return null;
+  if (record.type !== 'shogiman-advice-request' || typeof record.id !== 'string') return null;
+  return {
+    type: 'shogiman-advice-request',
+    id: record.id,
+    method: typeof record.method === 'string' ? record.method : 'POST',
+    body: typeof record.body === 'string' ? record.body : null,
+  };
+}
+
+function parseNativeGameEvent(data: string): NativeGameEvent | null {
+  const record = parseJsonRecord(data);
+  if (!record) return null;
+  if (record.type !== 'shogiman-native-event' || record.event !== 'capture') return null;
+  return { type: 'shogiman-native-event', event: 'capture' };
 }
 
 function serializeForInjectedJavaScript(value: unknown) {
@@ -67,6 +85,12 @@ export default function App() {
   }
 
   async function handleWebViewMessage(data: string) {
+    const nativeEvent = parseNativeGameEvent(data);
+    if (nativeEvent?.event === 'capture') {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      return;
+    }
+
     const request = parseAdviceBridgeRequest(data);
     if (!request) return;
 
