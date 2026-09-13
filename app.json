@@ -5,10 +5,12 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
+    "icon": "./assets/icon.png",
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.wezard17301.shogimanexpo",
       "infoPlist": {
+        "CFBundleDisplayName": "将棋戦線",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
