@@ -9,6 +9,14 @@ import { getShogimanHtml } from './src/shogimanHtml';
 
 const NativeWebView = WebView as unknown as React.ComponentClass<any>;
 const BGM_SOURCE = require('./assets/audio/frontline_command_v4_heroic.m4a');
+const MOVE_SOURCE = require('./assets/audio/se_move_mechanical.wav');
+const DROP_SOURCE = require('./assets/audio/se_drop_heavy.wav');
+const CAPTURE_SOURCE = require('./assets/audio/se_capture_impact.wav');
+const PROMOTE_SOURCE = require('./assets/audio/se_promote_rise.wav');
+const AI_SOURCE = require('./assets/audio/se_ai_receive.wav');
+const CHECKMATE_SOURCE = require('./assets/audio/se_checkmate_final.wav');
+
+type NativeGameEventName = 'move' | 'drop' | 'capture' | 'promote' | 'checkmate' | 'sound-on' | 'sound-off';
 
 interface AdviceBridgeRequest {
   type: 'shogiman-advice-request';
@@ -27,7 +35,7 @@ interface AdviceBridgeResponse {
 
 interface NativeGameEvent {
   type: 'shogiman-native-event';
-  event: 'capture';
+  event: NativeGameEventName;
 }
 
 interface WebViewHandle {
@@ -62,9 +70,10 @@ function parseAdviceBridgeRequest(data: string): AdviceBridgeRequest | null {
 
 function parseNativeGameEvent(data: string): NativeGameEvent | null {
   const record = parseJsonRecord(data);
-  if (!record) return null;
-  if (record.type !== 'shogiman-native-event' || record.event !== 'capture') return null;
-  return { type: 'shogiman-native-event', event: 'capture' };
+  if (!record || record.type !== 'shogiman-native-event' || typeof record.event !== 'string') return null;
+  const supportedEvents: NativeGameEventName[] = ['move', 'drop', 'capture', 'promote', 'checkmate', 'sound-on', 'sound-off'];
+  if (!supportedEvents.includes(record.event as NativeGameEventName)) return null;
+  return { type: 'shogiman-native-event', event: record.event as NativeGameEventName };
 }
 
 function serializeForInjectedJavaScript(value: unknown) {
@@ -76,9 +85,17 @@ function serializeForInjectedJavaScript(value: unknown) {
 
 export default function App() {
   const [hasStarted, setHasStarted] = useState(false);
+  const [sfxEnabled, setSfxEnabled] = useState(true);
   const webViewRef = useRef<WebViewHandle | null>(null);
   const adviceApiUrl = process.env.EXPO_PUBLIC_ADVICE_API_URL;
+
   const bgmPlayer = useAudioPlayer(BGM_SOURCE, { downloadFirst: true });
+  const movePlayer = useAudioPlayer(MOVE_SOURCE, { downloadFirst: true });
+  const dropPlayer = useAudioPlayer(DROP_SOURCE, { downloadFirst: true });
+  const capturePlayer = useAudioPlayer(CAPTURE_SOURCE, { downloadFirst: true });
+  const promotePlayer = useAudioPlayer(PROMOTE_SOURCE, { downloadFirst: true });
+  const aiPlayer = useAudioPlayer(AI_SOURCE, { downloadFirst: true });
+  const checkmatePlayer = useAudioPlayer(CHECKMATE_SOURCE, { downloadFirst: true });
 
   useEffect(() => {
     void setAudioModeAsync({
@@ -89,7 +106,18 @@ export default function App() {
 
     bgmPlayer.loop = true;
     bgmPlayer.volume = 0.42;
-  }, [bgmPlayer]);
+    movePlayer.volume = 0.62;
+    dropPlayer.volume = 0.72;
+    capturePlayer.volume = 0.9;
+    promotePlayer.volume = 0.78;
+    aiPlayer.volume = 0.66;
+    checkmatePlayer.volume = 0.92;
+  }, [aiPlayer, bgmPlayer, capturePlayer, checkmatePlayer, dropPlayer, movePlayer, promotePlayer]);
+
+  async function replay(player: ReturnType<typeof useAudioPlayer>) {
+    await player.seekTo(0);
+    player.play();
+  }
 
   function startGame() {
     bgmPlayer.play();
@@ -103,10 +131,45 @@ export default function App() {
     );
   }
 
+  async function handleNativeGameEvent(event: NativeGameEventName) {
+    if (event === 'sound-on') {
+      setSfxEnabled(true);
+      return;
+    }
+    if (event === 'sound-off') {
+      setSfxEnabled(false);
+      return;
+    }
+    if (!sfxEnabled) return;
+
+    if (event === 'move') {
+      await replay(movePlayer);
+      return;
+    }
+    if (event === 'drop') {
+      await replay(dropPlayer);
+      return;
+    }
+    if (event === 'capture') {
+      await Promise.all([
+        replay(capturePlayer),
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy),
+      ]);
+      return;
+    }
+    if (event === 'promote') {
+      await replay(promotePlayer);
+      return;
+    }
+    if (event === 'checkmate') {
+      await replay(checkmatePlayer);
+    }
+  }
+
   async function handleWebViewMessage(data: string) {
     const nativeEvent = parseNativeGameEvent(data);
-    if (nativeEvent?.event === 'capture') {
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    if (nativeEvent) {
+      await handleNativeGameEvent(nativeEvent.event);
       return;
     }
 
@@ -134,6 +197,7 @@ export default function App() {
         status: response.status,
         body,
       });
+      if (response.ok && sfxEnabled) await replay(aiPlayer);
     } catch (error) {
       sendAdviceBridgeResponse({
         id: request.id,
