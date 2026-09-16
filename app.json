@@ -21,7 +21,13 @@
     },
     "owner": "wezard17301",
     "plugins": [
-      "expo-audio"
+      [
+        "expo-audio",
+        {
+          "enableBackgroundPlayback": false,
+          "enableBackgroundRecording": false
+        }
+      ]
     ]
   }
 }
